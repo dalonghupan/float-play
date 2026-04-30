@@ -1,0 +1,41 @@
+<idea-plugin>
+    <id>com.floatplay</id>
+    <name>FloatPlay</name>
+    <version>1.0.0</version>
+    <vendor>FloatPlay Team</vendor>
+
+    <description><![CDATA[
+        轻量悬浮视频播放器，编码观影两不误。
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService
+            serviceImplementation="com.floatplay.settings.FloatPlaySettings"/>
+    </extensions>
+
+    <project-components>
+        <component>
+            <implementation-class>com.floatplay.FloatPlayPlugin</implementation-class>
+        </component>
+    </project-components>
+
+    <actions>
+        <action id="FloatPlay.TogglePlayer"
+                class="com.floatplay.action.TogglePlayerAction"
+                text="Toggle FloatPlay"
+                description="显示/隐藏悬浮播放器">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default"
+                               first-keystroke="ctrl alt P"/>
+        </action>
+
+        <action id="FloatPlay.Settings"
+                class="com.floatplay.action.SettingsAction"
+                text="FloatPlay Settings"
+                description="打开 FloatPlay 设置">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
