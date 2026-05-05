@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check *)",
+      "Bash(ffmpeg -version)",
+      "Bash(brew list *)",
+      "Bash(brew install *)",
+      "Bash(pkg-config --libs libavcodec)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git rm *)"
+    ]
+  }
+}
