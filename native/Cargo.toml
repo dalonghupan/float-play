@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 [dependencies]
 jni = "0.21"
 ffmpeg-next = "7.1"
-ffmpeg-sys-next = { version = "7.1", features = ["build"] }
+ffmpeg-sys-next = "7.1"
 cpal = "0.15"
 
 [build-dependencies]

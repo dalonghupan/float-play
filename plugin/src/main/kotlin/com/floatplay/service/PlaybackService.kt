@@ -9,11 +9,19 @@ class PlaybackService {
     }
 
     fun openFile(path: String): Boolean {
-        return NativeBridge.nativeOpenFile(handle, path)
+        return try {
+            NativeBridge.nativeOpenFile(handle, path)
+        } catch (e: RuntimeException) {
+            false
+        }
     }
 
     fun openUrl(url: String): Boolean {
-        return NativeBridge.nativeOpenUrl(handle, url)
+        return try {
+            NativeBridge.nativeOpenUrl(handle, url)
+        } catch (e: RuntimeException) {
+            false
+        }
     }
 
     fun play() {
@@ -29,7 +37,11 @@ class PlaybackService {
     }
 
     fun seek(positionMs: Long) {
-        NativeBridge.nativeSeek(handle, positionMs)
+        try {
+            NativeBridge.nativeSeek(handle, positionMs)
+        } catch (e: RuntimeException) {
+            // Seek error - silently ignored
+        }
     }
 
     fun getPosition(): Long {
@@ -50,6 +62,22 @@ class PlaybackService {
 
     fun setSpeed(speed: Float) {
         NativeBridge.nativeSetSpeed(handle, speed)
+    }
+
+    fun isPlaying(): Boolean {
+        return NativeBridge.nativeIsPlaying(handle)
+    }
+
+    fun hasReachedEnd(): Boolean {
+        return NativeBridge.nativeHasReachedEnd(handle)
+    }
+
+    fun getVideoWidth(): Int {
+        return NativeBridge.nativeGetVideoWidth(handle)
+    }
+
+    fun getVideoHeight(): Int {
+        return NativeBridge.nativeGetVideoHeight(handle)
     }
 
     fun getFrame(buffer: ByteArray, width: Int, height: Int): Boolean {

@@ -1,5 +1,5 @@
 use ffmpeg_next as ffmpeg;
-use ffmpeg::format::{input, context::Input};
+use ffmpeg::format::{input, context::Input, dictionary::Dictionary};
 use ffmpeg::codec::decoder::Video;
 use ffmpeg::software::scaling::{Context as ScalingContext, flag::Flags};
 use ffmpeg::media::Type;
@@ -15,10 +15,25 @@ pub struct VideoDecoder {
     time_base: f64,
 }
 
+fn is_network_url(path: &str) -> bool {
+    path.starts_with("http://") || path.starts_with("https://")
+        || path.starts_with("rtmp://") || path.starts_with("rtsp://")
+}
+
 impl VideoDecoder {
     pub fn new(input_path: &str) -> Result<Self, String> {
-        let input_ctx = input(&input_path)
-            .map_err(|e| format!("Failed to open input: {}", e))?;
+        let input_ctx = if is_network_url(input_path) {
+            let opts = Dictionary::new()
+                .set("timeout", "10000000")  // 10 second connect timeout (microseconds)
+                .set("reconnect", "1")
+                .set("reconnect_streamed", "1")
+                .set("reconnect_delay_max", "5");
+            ffmpeg::format::input_with_dictionary(&input_path, opts)
+                .map_err(|e| format!("Failed to open input: {}", e))?
+        } else {
+            input(&input_path)
+                .map_err(|e| format!("Failed to open input: {}", e))?
+        };
 
         let video_stream = input_ctx
             .streams()
@@ -38,7 +53,7 @@ impl VideoDecoder {
             decoder.format(),
             decoder.width(),
             decoder.height(),
-            ffmpeg::format::Pixel::RGB24,
+            ffmpeg::format::Pixel::ARGB,
             decoder.width(),
             decoder.height(),
             Flags::BILINEAR,
@@ -61,18 +76,23 @@ impl VideoDecoder {
 
                 let mut decoded = VideoFrame::empty();
                 while self.decoder.receive_frame(&mut decoded).is_ok() {
-                    let mut rgb_frame = VideoFrame::empty();
-                    self.scaler.run(&decoded, &mut rgb_frame)
+                    let mut argb_frame = VideoFrame::empty();
+                    self.scaler.run(&decoded, &mut argb_frame)
                         .map_err(|e| format!("Failed to convert frame: {}", e))?;
 
-                    let width = rgb_frame.width();
-                    let height = rgb_frame.height();
-                    let data = rgb_frame.data(0).to_vec();
+                    let width = argb_frame.width();
+                    let height = argb_frame.height();
+                    let data = argb_frame.data(0).to_vec();
+
+                    let pts = decoded.pts()
+                        .map(|p| p as f64 * self.time_base)
+                        .unwrap_or(0.0);
 
                     return Ok(DecodedFrame {
                         width,
                         height,
                         data,
+                        pts,
                     });
                 }
             }
@@ -95,5 +115,13 @@ impl VideoDecoder {
         } else {
             (duration as f64 / ffmpeg::ffi::AV_TIME_BASE as f64 * 1000.0) as u64
         }
+    }
+
+    pub fn width(&self) -> u32 {
+        self.decoder.width()
+    }
+
+    pub fn height(&self) -> u32 {
+        self.decoder.height()
     }
 }

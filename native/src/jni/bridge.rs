@@ -37,7 +37,10 @@ pub extern "system" fn Java_com_floatplay_service_NativeBridge_nativeOpenFile(
 
     match engine.open_file(&path) {
         Ok(_) => true as jboolean,
-        Err(_) => false as jboolean,
+        Err(e) => {
+            let _ = env.throw_new("java/lang/RuntimeException", &e);
+            false as jboolean
+        }
     }
 }
 
@@ -56,7 +59,10 @@ pub extern "system" fn Java_com_floatplay_service_NativeBridge_nativeOpenUrl(
 
     match engine.open_url(&url_str) {
         Ok(_) => true as jboolean,
-        Err(_) => false as jboolean,
+        Err(e) => {
+            let _ = env.throw_new("java/lang/RuntimeException", &e);
+            false as jboolean
+        }
     }
 }
 
@@ -95,13 +101,15 @@ pub extern "system" fn Java_com_floatplay_service_NativeBridge_nativeStop(
 
 #[no_mangle]
 pub extern "system" fn Java_com_floatplay_service_NativeBridge_nativeSeek(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
     position_ms: jlong,
 ) {
     if let Some(engine) = unsafe { get_engine(handle) } {
-        let _ = engine.seek(position_ms as u64);
+        if let Err(e) = engine.seek(position_ms as u64) {
+            let _ = env.throw_new("java/lang/RuntimeException", &e);
+        }
     }
 }
 
@@ -179,7 +187,7 @@ pub extern "system" fn Java_com_floatplay_service_NativeBridge_nativeGetFrame(
         None => return false as jboolean,
     };
 
-    let mut vec = vec![0u8; (width * height * 3) as usize];
+    let mut vec = vec![0u8; (width * height * 4) as usize]; // ARGB = 4 bytes per pixel
     let result = engine.get_frame(&mut vec, width as u32, height as u32);
 
     if result {
@@ -189,6 +197,54 @@ pub extern "system" fn Java_com_floatplay_service_NativeBridge_nativeGetFrame(
         true as jboolean
     } else {
         false as jboolean
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_floatplay_service_NativeBridge_nativeIsPlaying(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jboolean {
+    match unsafe { get_engine(handle) } {
+        Some(engine) => engine.is_playing() as jboolean,
+        None => false as jboolean,
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_floatplay_service_NativeBridge_nativeHasReachedEnd(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jboolean {
+    match unsafe { get_engine(handle) } {
+        Some(engine) => engine.has_reached_end() as jboolean,
+        None => false as jboolean,
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_floatplay_service_NativeBridge_nativeGetVideoWidth(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jint {
+    match unsafe { get_engine(handle) } {
+        Some(engine) => engine.get_video_resolution().0 as jint,
+        None => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_floatplay_service_NativeBridge_nativeGetVideoHeight(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jint {
+    match unsafe { get_engine(handle) } {
+        Some(engine) => engine.get_video_resolution().1 as jint,
+        None => 0,
     }
 }
 

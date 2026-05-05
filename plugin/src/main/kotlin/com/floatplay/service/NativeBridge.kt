@@ -32,8 +32,16 @@ object NativeBridge {
     // 倍速控制
     external fun nativeSetSpeed(handle: Long, speed: Float)
 
-    // 获取视频帧 (用于渲染到 Swing 组件)
+    // 获取视频帧 (ARGB格式)
     external fun nativeGetFrame(handle: Long, buffer: ByteArray, width: Int, height: Int): Boolean
+
+    // 播放状态
+    external fun nativeIsPlaying(handle: Long): Boolean
+    external fun nativeHasReachedEnd(handle: Long): Boolean
+
+    // 视频分辨率
+    external fun nativeGetVideoWidth(handle: Long): Int
+    external fun nativeGetVideoHeight(handle: Long): Int
 
     // 释放资源
     external fun nativeDestroy(handle: Long)

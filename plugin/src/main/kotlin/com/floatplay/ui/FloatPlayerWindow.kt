@@ -4,17 +4,18 @@ import com.floatplay.service.PlaybackService
 import com.floatplay.settings.FloatPlaySettings
 import java.awt.*
 import java.awt.event.*
+import java.awt.image.BufferedImage
+import java.awt.image.DataBufferInt
 import javax.swing.*
 
 class FloatPlayerWindow : JFrame() {
 
-    private val videoPanel = JPanel()
+    private val videoPanel = VideoPanel()
     private val controlPanel = PlayerControlPanel()
     private val playbackService = PlaybackService()
     private val themeAdapter = ThemeAdapter()
-    private val renderer = VideoRenderer(videoPanel)
 
-    private var frameBuffer = ByteArray(1920 * 1080 * 3)
+    private var frameBuffer = ByteArray(0)
     private var updateTimer: Timer? = null
 
     init {
@@ -34,11 +35,6 @@ class FloatPlayerWindow : JFrame() {
         layout = BorderLayout()
         videoPanel.preferredSize = Dimension(640, 360)
         videoPanel.background = Color.BLACK
-        videoPanel.addComponentListener(object : ComponentAdapter() {
-            override fun componentResized(e: ComponentEvent) {
-                renderer.resize(videoPanel.width, videoPanel.height)
-            }
-        })
 
         add(videoPanel, BorderLayout.CENTER)
         add(controlPanel, BorderLayout.SOUTH)
@@ -86,7 +82,7 @@ class FloatPlayerWindow : JFrame() {
         }
 
         controlPanel.onPlayPause = {
-            if (playbackService.getPosition() > 0) {
+            if (playbackService.isPlaying()) {
                 playbackService.pause()
                 controlPanel.setPlayState(false)
             } else {
@@ -117,6 +113,7 @@ class FloatPlayerWindow : JFrame() {
         val success = playbackService.openFile(path)
         if (success) {
             title = "FloatPlay - ${path.substringAfterLast("/")}"
+            allocateFrameBuffer()
             startFrameUpdate()
         }
         return success
@@ -126,27 +123,42 @@ class FloatPlayerWindow : JFrame() {
         val success = playbackService.openUrl(url)
         if (success) {
             title = "FloatPlay - $url"
+            allocateFrameBuffer()
             startFrameUpdate()
         }
         return success
     }
 
+    private fun allocateFrameBuffer() {
+        val videoWidth = playbackService.getVideoWidth()
+        val videoHeight = playbackService.getVideoHeight()
+        if (videoWidth > 0 && videoHeight > 0) {
+            frameBuffer = ByteArray(videoWidth * videoHeight * 4) // ARGB
+        }
+    }
+
     private fun startFrameUpdate() {
         updateTimer?.stop()
+        val videoWidth = playbackService.getVideoWidth()
+        val videoHeight = playbackService.getVideoHeight()
         updateTimer = Timer(33) { // ~30fps
-            val width = videoPanel.width
-            val height = videoPanel.height
-            if (width > 0 && height > 0) {
-                if (frameBuffer.size != width * height * 3) {
-                    frameBuffer = ByteArray(width * height * 3)
+            if (videoWidth > 0 && videoHeight > 0) {
+                if (playbackService.getFrame(frameBuffer, videoWidth, videoHeight)) {
+                    videoPanel.updateFrame(frameBuffer, videoWidth, videoHeight)
                 }
-                if (playbackService.getFrame(frameBuffer, width, height)) {
-                    renderer.updateFrame(frameBuffer, width, height)
+
+                // 播放结束检测
+                if (playbackService.hasReachedEnd()) {
+                    playbackService.stop()
+                    controlPanel.setPlayState(false)
+                    controlPanel.updateProgress(playbackService.getDuration(), playbackService.getDuration())
+                    updateTimer?.stop()
+                } else {
+                    controlPanel.updateProgress(
+                        playbackService.getPosition(),
+                        playbackService.getDuration()
+                    )
                 }
-                controlPanel.updateProgress(
-                    playbackService.getPosition(),
-                    playbackService.getDuration()
-                )
             }
         }
         updateTimer?.start()
@@ -284,53 +296,50 @@ class FloatPlayerWindow : JFrame() {
             }
         }
     }
+}
 
-    private class VideoRenderer(private val videoPanel: JPanel) {
-        private var currentImage: Image? = null
-        private var panelWidth = 0
-        private var panelHeight = 0
+private class VideoPanel : JPanel() {
+    private var currentImage: Image? = null
+    private var imgWidth = 0
+    private var imgHeight = 0
 
-        fun resize(width: Int, height: Int) {
-            panelWidth = width
-            panelHeight = height
+    fun updateFrame(buffer: ByteArray, width: Int, height: Int) {
+        // ARGB format - direct pixel copy using BufferedImage
+        val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+        val dataBuffer = (image.raster.dataBuffer as DataBufferInt).data
+
+        for (i in 0 until width * height) {
+            val offset = i * 4
+            val a = buffer[offset].toInt() and 0xFF
+            val r = buffer[offset + 1].toInt() and 0xFF
+            val g = buffer[offset + 2].toInt() and 0xFF
+            val b = buffer[offset + 3].toInt() and 0xFF
+            dataBuffer[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
         }
 
-        fun updateFrame(buffer: ByteArray, width: Int, height: Int) {
-            val image = Toolkit.getDefaultToolkit().createImage(
-                java.awt.image.MemoryImageSource(width, height, buffer.toIntArray(), 0, width)
-            )
-            currentImage = image
-            videoPanel.repaint()
-        }
+        currentImage = image
+        imgWidth = width
+        imgHeight = height
+        repaint()
+    }
 
-        fun paint(g: Graphics2D) {
-            currentImage?.let { img ->
-                val imgWidth = img.getWidth(null)
-                val imgHeight = img.getHeight(null)
-                if (imgWidth > 0 && imgHeight > 0) {
-                    val scale = minOf(
-                        panelWidth.toDouble() / imgWidth,
-                        panelHeight.toDouble() / imgHeight
-                    )
-                    val scaledWidth = (imgWidth * scale).toInt()
-                    val scaledHeight = (imgHeight * scale).toInt()
-                    val x = (panelWidth - scaledWidth) / 2
-                    val y = (panelHeight - scaledHeight) / 2
+    override fun paintComponent(g: Graphics) {
+        super.paintComponent(g)
+        currentImage?.let { img ->
+            if (imgWidth > 0 && imgHeight > 0) {
+                val panelWidth = width
+                val panelHeight = height
+                val scale = minOf(
+                    panelWidth.toDouble() / imgWidth,
+                    panelHeight.toDouble() / imgHeight
+                )
+                val scaledWidth = (imgWidth * scale).toInt()
+                val scaledHeight = (imgHeight * scale).toInt()
+                val x = (panelWidth - scaledWidth) / 2
+                val y = (panelHeight - scaledHeight) / 2
 
-                    g.drawImage(img, x, y, scaledWidth, scaledHeight, null)
-                }
+                (g as Graphics2D).drawImage(img, x, y, scaledWidth, scaledHeight, null)
             }
-        }
-
-        private fun ByteArray.toIntArray(): IntArray {
-            val intArray = IntArray(size / 3)
-            for (i in intArray.indices) {
-                val r = this[i * 3].toInt() and 0xFF
-                val g = this[i * 3 + 1].toInt() and 0xFF
-                val b = this[i * 3 + 2].toInt() and 0xFF
-                intArray[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-            }
-            return intArray
         }
     }
 }
