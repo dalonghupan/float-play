@@ -7,6 +7,7 @@ import java.awt.event.*
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferInt
 import javax.swing.*
+import kotlin.concurrent.thread
 
 class FloatPlayerWindow : JFrame() {
 
@@ -29,6 +30,15 @@ class FloatPlayerWindow : JFrame() {
         setupResizeListeners()
         setupControlListeners()
         restoreSettings()
+
+        // Stop playback when window is closed/hidden
+        addWindowListener(object : WindowAdapter() {
+            override fun windowClosing(e: WindowEvent) {
+                updateTimer?.stop()
+                playbackService.stop()
+                controlPanel.setPlayState(false)
+            }
+        })
     }
 
     private fun setupUI() {
@@ -86,14 +96,19 @@ class FloatPlayerWindow : JFrame() {
                 playbackService.pause()
                 controlPanel.setPlayState(false)
             } else {
+                // If at end, seek to start first
+                if (playbackService.hasReachedEnd()) {
+                    playbackService.seek(0)
+                }
                 playbackService.play()
                 controlPanel.setPlayState(true)
             }
         }
 
-        controlPanel.onStop = {
-            playbackService.stop()
-            controlPanel.setPlayState(false)
+        controlPanel.onReplay = {
+            playbackService.seek(0)
+            playbackService.play()
+            controlPanel.setPlayState(true)
         }
 
         controlPanel.onSeek = { positionMs ->
@@ -109,24 +124,38 @@ class FloatPlayerWindow : JFrame() {
         }
     }
 
-    fun openFile(path: String): Boolean {
-        val success = playbackService.openFile(path)
-        if (success) {
-            title = "FloatPlay - ${path.substringAfterLast("/")}"
-            allocateFrameBuffer()
-            startFrameUpdate()
+    fun openFile(path: String) {
+        title = "FloatPlay - 打开中..."
+        thread {
+            val success = playbackService.openFile(path)
+            SwingUtilities.invokeLater {
+                if (success) {
+                    title = "FloatPlay - ${path.substringAfterLast("/")}"
+                    allocateFrameBuffer()
+                    startFrameUpdate()
+                } else {
+                    title = "FloatPlay"
+                    JOptionPane.showMessageDialog(this, "无法打开文件: $path", "错误", JOptionPane.ERROR_MESSAGE)
+                }
+            }
         }
-        return success
     }
 
-    fun openUrl(url: String): Boolean {
-        val success = playbackService.openUrl(url)
-        if (success) {
-            title = "FloatPlay - $url"
-            allocateFrameBuffer()
-            startFrameUpdate()
+    fun openUrl(url: String) {
+        title = "FloatPlay - 连接中..."
+        thread {
+            val success = playbackService.openUrl(url)
+            SwingUtilities.invokeLater {
+                if (success) {
+                    title = "FloatPlay - $url"
+                    allocateFrameBuffer()
+                    startFrameUpdate()
+                } else {
+                    title = "FloatPlay"
+                    JOptionPane.showMessageDialog(this, "无法打开URL: $url\n\n请检查链接是否正确，以及FFmpeg是否支持该协议。", "错误", JOptionPane.ERROR_MESSAGE)
+                }
+            }
         }
-        return success
     }
 
     private fun allocateFrameBuffer() {
@@ -149,10 +178,8 @@ class FloatPlayerWindow : JFrame() {
 
                 // 播放结束检测
                 if (playbackService.hasReachedEnd()) {
-                    playbackService.stop()
                     controlPanel.setPlayState(false)
                     controlPanel.updateProgress(playbackService.getDuration(), playbackService.getDuration())
-                    updateTimer?.stop()
                 } else {
                     controlPanel.updateProgress(
                         playbackService.getPosition(),

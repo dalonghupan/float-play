@@ -4,6 +4,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 pub struct AudioOutput {
     _stream: cpal::Stream,
     buffer: Arc<Mutex<Vec<f32>>>,
+    sample_rate: usize,
+    channels: usize,
 }
 
 impl AudioOutput {
@@ -15,7 +17,7 @@ impl AudioOutput {
         let config = device.default_output_config()
             .map_err(|e| format!("Failed to get output config: {}", e))?;
 
-        let sample_rate = config.sample_rate().0;
+        let sample_rate = config.sample_rate().0 as usize;
         let channels = config.channels() as usize;
 
         let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
@@ -45,14 +47,16 @@ impl AudioOutput {
         Ok(AudioOutput {
             _stream: stream,
             buffer,
+            sample_rate,
+            channels,
         })
     }
 
     pub fn write_samples(&self, samples: &[f32]) {
         let mut buf = self.buffer.lock().unwrap();
         buf.extend_from_slice(samples);
-        // Limit buffer size to prevent memory issues (~5 seconds at 44100Hz stereo)
-        let max_samples = 44100 * 2 * 5;
+        // Limit buffer size to prevent memory issues (~5 seconds)
+        let max_samples = self.sample_rate * self.channels * 5;
         if buf.len() > max_samples {
             let excess = buf.len() - max_samples;
             buf.drain(..excess);

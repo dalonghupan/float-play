@@ -155,6 +155,8 @@ cargo build
 
 # 或发布模式编译 (优化后，用于性能测试)
 cargo build --release
+# 如果执行了 cargo clean 后重新编译，需要先设置环境变量
+OPENSSL_DIR=/usr/local/opt/openssl@3 cargo build --release
 ```
 
 编译产物位置：

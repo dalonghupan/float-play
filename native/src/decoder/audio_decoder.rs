@@ -9,7 +9,12 @@ pub struct AudioDecoder {
     decoder: Audio,
     resampler: ResamplingContext,
     audio_stream_index: usize,
+    pub input_path: String,
+    pub ended: bool,
 }
+
+// Safety: AudioDecoder is moved into a single thread and never shared.
+unsafe impl Send for AudioDecoder {}
 
 impl AudioDecoder {
     pub fn new(input_path: &str) -> Result<Self, String> {
@@ -33,7 +38,7 @@ impl AudioDecoder {
             decoder.format(),
             decoder.channel_layout(),
             decoder.rate(),
-            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
             ffmpeg::channel_layout::ChannelLayout::STEREO,
             44100,
         ).map_err(|e| format!("Failed to create resampler: {}", e))?;
@@ -43,6 +48,8 @@ impl AudioDecoder {
             decoder,
             resampler,
             audio_stream_index,
+            input_path: input_path.to_string(),
+            ended: false,
         })
     }
 
@@ -71,6 +78,7 @@ impl AudioDecoder {
                 }
             }
         }
+        self.ended = true;
         Err("End of stream".to_string())
     }
 
@@ -82,6 +90,7 @@ impl AudioDecoder {
         self.input_ctx.seek(timestamp, ..timestamp)
             .map_err(|e| format!("Failed to seek: {}", e))?;
         self.decoder.flush();
+        self.ended = false;
         Ok(())
     }
 }

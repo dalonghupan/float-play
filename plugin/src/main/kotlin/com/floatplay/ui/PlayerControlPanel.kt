@@ -8,7 +8,7 @@ class PlayerControlPanel : JPanel() {
     private val openFileBtn = JButton("打开文件")
     private val openUrlBtn = JButton("打开URL")
     private val playPauseBtn = JButton("▶")
-    private val stopBtn = JButton("停止")
+    private val replayBtn = JButton("重播")
     private val progressBar = JSlider(0, 1000, 0)
     private val volumeSlider = JSlider(0, 100, 70)
     private val speedComboBox = JComboBox(arrayOf("0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "2.0x"))
@@ -16,7 +16,7 @@ class PlayerControlPanel : JPanel() {
     var onOpenFile: (() -> Unit)? = null
     var onOpenUrl: (() -> Unit)? = null
     var onPlayPause: (() -> Unit)? = null
-    var onStop: (() -> Unit)? = null
+    var onReplay: (() -> Unit)? = null
     var onSeek: ((Long) -> Unit)? = null
     var onVolumeChange: ((Float) -> Unit)? = null
     var onSpeedChange: ((Float) -> Unit)? = null
@@ -39,8 +39,8 @@ class PlayerControlPanel : JPanel() {
             onPlayPause?.invoke()
         }
 
-        stopBtn.addActionListener {
-            onStop?.invoke()
+        replayBtn.addActionListener {
+            onReplay?.invoke()
         }
 
         progressBar.addChangeListener {
@@ -69,7 +69,7 @@ class PlayerControlPanel : JPanel() {
         add(openFileBtn)
         add(openUrlBtn)
         add(playPauseBtn)
-        add(stopBtn)
+        add(replayBtn)
         add(progressBar)
         add(JLabel("音量:"))
         add(volumeSlider)

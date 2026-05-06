@@ -9,6 +9,7 @@ use crate::audio::audio_output::AudioOutput;
 
 pub struct PlayerEngine {
     is_playing: Arc<Mutex<bool>>,
+    exit_flag: Arc<Mutex<bool>>,
     current_position: Arc<Mutex<u64>>,
     duration: u64,
     volume: Arc<Mutex<f32>>,
@@ -21,12 +22,14 @@ pub struct PlayerEngine {
     video_width: Arc<Mutex<u32>>,
     video_height: Arc<Mutex<u32>>,
     reached_end: Arc<Mutex<bool>>,
+    input_path: String,
 }
 
 impl PlayerEngine {
     pub fn new() -> Self {
         PlayerEngine {
             is_playing: Arc::new(Mutex::new(false)),
+            exit_flag: Arc::new(Mutex::new(false)),
             current_position: Arc::new(Mutex::new(0)),
             duration: 0,
             volume: Arc::new(Mutex::new(1.0)),
@@ -39,11 +42,12 @@ impl PlayerEngine {
             video_width: Arc::new(Mutex::new(0)),
             video_height: Arc::new(Mutex::new(0)),
             reached_end: Arc::new(Mutex::new(false)),
+            input_path: String::new(),
         }
     }
 
     pub fn open_file(&mut self, path: &str) -> Result<(), String> {
-        self.stop_internal();
+        self.close_internal();
 
         let video = VideoDecoder::new(path)?;
         let audio = AudioDecoder::new(path)?;
@@ -51,6 +55,8 @@ impl PlayerEngine {
         self.duration = video.get_duration();
         *self.video_width.lock().unwrap() = video.width();
         *self.video_height.lock().unwrap() = video.height();
+        self.input_path = path.to_string();
+        *self.exit_flag.lock().unwrap() = false;
 
         let (frame_tx, frame_rx) = mpsc::channel();
         let (seek_tx, seek_rx) = mpsc::channel::<u64>();
@@ -58,12 +64,15 @@ impl PlayerEngine {
         self.frame_rx = Some(frame_rx);
         self.seek_tx = Some(seek_tx);
         *self.reached_end.lock().unwrap() = false;
+        *self.current_position.lock().unwrap() = 0;
 
         // Video decode thread
         let is_playing = self.is_playing.clone();
+        let exit_flag = self.exit_flag.clone();
         let current_position = self.current_position.clone();
         let latest_frame = self.latest_frame.clone();
         let reached_end = self.reached_end.clone();
+        let input_path_v = self.input_path.clone();
 
         let video_handle = thread::spawn(move || {
             let mut video_decoder = video;
@@ -71,22 +80,59 @@ impl PlayerEngine {
             let start_time = Instant::now();
 
             loop {
-                if !*is_playing.lock().unwrap() {
-                    thread::sleep(Duration::from_millis(10));
-                    if let Ok(pos) = seek_rx.try_recv() {
-                        let _ = video_decoder.seek(pos);
-                        pts_offset = pos as f64 / 1000.0;
-                        *current_position.lock().unwrap() = pos;
-                    }
-                    continue;
+                if *exit_flag.lock().unwrap() {
+                    break;
                 }
 
-                if let Ok(pos) = seek_rx.try_recv() {
+                // Drain any pending seeks before decoding
+                while let Ok(pos) = seek_rx.try_recv() {
                     let _ = video_decoder.seek(pos);
-                    // Adjust pts_offset so frame pacing continues correctly
-                    let wall_elapsed = start_time.elapsed().as_secs_f64();
-                    pts_offset = wall_elapsed - (pos as f64 / 1000.0);
+                    if pos == 0 {
+                        pts_offset = 0.0;
+                    } else {
+                        let wall_elapsed = start_time.elapsed().as_secs_f64();
+                        pts_offset = wall_elapsed - (pos as f64 / 1000.0);
+                    }
                     *current_position.lock().unwrap() = pos;
+                    *reached_end.lock().unwrap() = false;
+                }
+
+                if !*is_playing.lock().unwrap() {
+                    // Paused — spin-wait, process seeks
+                    while !*is_playing.lock().unwrap() {
+                        if *exit_flag.lock().unwrap() {
+                            return;
+                        }
+                        if let Ok(pos) = seek_rx.try_recv() {
+                            if *reached_end.lock().unwrap() || pos == 0 {
+                                match VideoDecoder::new(&input_path_v) {
+                                    Ok(mut v) => {
+                                        if pos > 0 {
+                                            let _ = v.seek(pos);
+                                        }
+                                        video_decoder = v;
+                                    }
+                                    Err(_) => {
+                                        thread::sleep(Duration::from_millis(100));
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                let _ = video_decoder.seek(pos);
+                            }
+                            if pos == 0 {
+                                pts_offset = 0.0;
+                            } else {
+                                let wall_elapsed = start_time.elapsed().as_secs_f64();
+                                pts_offset = wall_elapsed - (pos as f64 / 1000.0);
+                            }
+                            *current_position.lock().unwrap() = pos;
+                            *reached_end.lock().unwrap() = false;
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    continue;
                 }
 
                 match video_decoder.decode_next_frame() {
@@ -109,7 +155,6 @@ impl PlayerEngine {
                     Err(_) => {
                         *reached_end.lock().unwrap() = true;
                         *is_playing.lock().unwrap() = false;
-                        break;
                     }
                 }
             }
@@ -117,11 +162,14 @@ impl PlayerEngine {
 
         // Audio decode thread
         let is_playing = self.is_playing.clone();
+        let exit_flag = self.exit_flag.clone();
         let volume = self.volume.clone();
         let speed = self.speed.clone();
+        let input_path_a = self.input_path.clone();
 
         let audio_handle = thread::spawn(move || {
             let mut audio_decoder = audio;
+            let mut need_reopen = false;
 
             let audio_output = match AudioOutput::new() {
                 Ok(output) => Some(output),
@@ -132,6 +180,27 @@ impl PlayerEngine {
             };
 
             loop {
+                if *exit_flag.lock().unwrap() {
+                    break;
+                }
+
+                if need_reopen || audio_decoder.ended {
+                    while !*is_playing.lock().unwrap() {
+                        if *exit_flag.lock().unwrap() {
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    match AudioDecoder::new(&input_path_a) {
+                        Ok(d) => audio_decoder = d,
+                        Err(_) => {
+                            thread::sleep(Duration::from_millis(100));
+                            continue;
+                        }
+                    }
+                    need_reopen = false;
+                }
+
                 if !*is_playing.lock().unwrap() {
                     thread::sleep(Duration::from_millis(10));
                     continue;
@@ -142,13 +211,11 @@ impl PlayerEngine {
                         let current_volume = *volume.lock().unwrap();
                         let current_speed = *speed.lock().unwrap();
 
-                        // Apply volume
                         let mut output: Vec<f32> = samples
                             .iter()
                             .map(|s| s * current_volume)
                             .collect();
 
-                        // Speed adjustment by resampling
                         if (current_speed - 1.0).abs() > 0.01 {
                             output = adjust_speed(&output, current_speed);
                         }
@@ -157,7 +224,9 @@ impl PlayerEngine {
                             ao.write_samples(&output);
                         }
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        need_reopen = true;
+                    }
                 }
             }
         });
@@ -169,14 +238,12 @@ impl PlayerEngine {
     }
 
     pub fn open_url(&mut self, url: &str) -> Result<(), String> {
-        // Network streams use the same path; FFmpeg handles buffering internally.
-        // Future enhancement: configure FFmpeg options for timeout/reconnect.
         self.open_file(url)
     }
 
     pub fn play(&mut self) {
-        *self.is_playing.lock().unwrap() = true;
         *self.reached_end.lock().unwrap() = false;
+        *self.is_playing.lock().unwrap() = true;
     }
 
     pub fn pause(&mut self) {
@@ -184,23 +251,34 @@ impl PlayerEngine {
     }
 
     pub fn stop(&mut self) {
-        self.stop_internal();
-    }
-
-    fn stop_internal(&mut self) {
         *self.is_playing.lock().unwrap() = false;
         *self.current_position.lock().unwrap() = 0;
-        *self.latest_frame.lock().unwrap() = None;
+        if let Some(ref tx) = self.seek_tx {
+            let _ = tx.send(0);
+        }
+    }
 
+    fn close_internal(&mut self) {
+        // Signal threads to exit
+        *self.exit_flag.lock().unwrap() = true;
+        *self.is_playing.lock().unwrap() = false;
+
+        // Drop channels
         self.frame_rx = None;
         self.seek_tx = None;
 
+        // Join threads (they will exit quickly due to exit_flag)
         if let Some(handle) = self.video_thread.take() {
             let _ = handle.join();
         }
         if let Some(handle) = self.audio_thread.take() {
             let _ = handle.join();
         }
+
+        // Reset state
+        *self.current_position.lock().unwrap() = 0;
+        *self.latest_frame.lock().unwrap() = None;
+        *self.reached_end.lock().unwrap() = false;
     }
 
     pub fn seek(&mut self, position_ms: u64) -> Result<(), String> {
@@ -213,7 +291,6 @@ impl PlayerEngine {
     }
 
     pub fn get_frame(&mut self, buffer: &mut [u8], width: u32, height: u32) -> bool {
-        // Drain old frames, keep latest
         let mut latest: Option<DecodedFrame> = None;
         if let Some(ref rx) = self.frame_rx {
             while let Ok(frame) = rx.try_recv() {
@@ -230,7 +307,6 @@ impl PlayerEngine {
             }
         }
 
-        // Fallback to cached frame
         let frame = self.latest_frame.lock().unwrap();
         if let Some(ref decoded) = *frame {
             if decoded.width == width && decoded.height == height {
@@ -296,6 +372,6 @@ fn adjust_speed(samples: &[f32], speed: f32) -> Vec<f32> {
 
 impl Drop for PlayerEngine {
     fn drop(&mut self) {
-        self.stop_internal();
+        self.close_internal();
     }
 }

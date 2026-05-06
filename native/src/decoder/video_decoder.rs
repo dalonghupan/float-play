@@ -1,9 +1,10 @@
 use ffmpeg_next as ffmpeg;
-use ffmpeg::format::{input, context::Input, dictionary::Dictionary};
+use ffmpeg::format::context::Input;
 use ffmpeg::codec::decoder::Video;
 use ffmpeg::software::scaling::{Context as ScalingContext, flag::Flags};
 use ffmpeg::media::Type;
 use ffmpeg::util::frame::video::Video as VideoFrame;
+use ffmpeg::Dictionary;
 
 use super::DecodedFrame;
 
@@ -11,9 +12,13 @@ pub struct VideoDecoder {
     input_ctx: Input,
     decoder: Video,
     scaler: ScalingContext,
-    video_stream_index: usize,
+    pub video_stream_index: usize,
     time_base: f64,
+    pub input_path: String,
 }
+
+// Safety: VideoDecoder is moved into a single thread and never shared.
+unsafe impl Send for VideoDecoder {}
 
 fn is_network_url(path: &str) -> bool {
     path.starts_with("http://") || path.starts_with("https://")
@@ -23,15 +28,15 @@ fn is_network_url(path: &str) -> bool {
 impl VideoDecoder {
     pub fn new(input_path: &str) -> Result<Self, String> {
         let input_ctx = if is_network_url(input_path) {
-            let opts = Dictionary::new()
-                .set("timeout", "10000000")  // 10 second connect timeout (microseconds)
-                .set("reconnect", "1")
-                .set("reconnect_streamed", "1")
-                .set("reconnect_delay_max", "5");
+            let mut opts = Dictionary::new();
+            opts.set("timeout", "10000000");
+            opts.set("reconnect", "1");
+            opts.set("reconnect_streamed", "1");
+            opts.set("reconnect_delay_max", "5");
             ffmpeg::format::input_with_dictionary(&input_path, opts)
                 .map_err(|e| format!("Failed to open input: {}", e))?
         } else {
-            input(&input_path)
+            ffmpeg::format::input(&input_path)
                 .map_err(|e| format!("Failed to open input: {}", e))?
         };
 
@@ -65,9 +70,11 @@ impl VideoDecoder {
             scaler,
             video_stream_index,
             time_base: f64::from(time_base),
+            input_path: input_path.to_string(),
         })
     }
 
+    /// Decode the next video frame from the input. Returns Err when stream ends.
     pub fn decode_next_frame(&mut self) -> Result<DecodedFrame, String> {
         for (stream, packet) in self.input_ctx.packets() {
             if stream.index() == self.video_stream_index {
